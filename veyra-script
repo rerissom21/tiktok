@@ -1,0 +1,447 @@
+/**
+ * VEYRA v2 - Sistema de Proteção de Sites
+ * Versão: 2.0.0
+ *
+ * Uso Simples:
+ * <script src="https://veyra-ten.vercel.app/veyra.js"></script>
+ * <script>Veyra.init("SUA_API_KEY_AQUI");</script>
+ *
+ * Uso Avançado:
+ * <script src="https://veyra-ten.vercel.app/veyra.js"></script>
+ * <script>
+ *   Veyra.init("SUA_API_KEY_AQUI", {
+ *     debug: true,
+ *     checkInterval: 30000
+ *   });
+ * </script>
+ */
+
+(function() {
+  'use strict';
+
+  // PROTEÇÃO INSTANTÂNEA - Executar imediatamente
+  // Ocultar conteúdo até verificar status da proteção
+  (function() {
+    const instantStyle = document.createElement('style');
+    instantStyle.id = 'veyra-instant-hide';
+    instantStyle.textContent = `
+      html { visibility: hidden !important; opacity: 0 !important; }
+      .veyra-protection-active { visibility: visible !important; opacity: 1 !important; }
+    `;
+    if (document.head) {
+      document.head.appendChild(instantStyle);
+    } else {
+      document.addEventListener('DOMContentLoaded', function() {
+        document.head.appendChild(instantStyle);
+      });
+    }
+  })();
+
+  // Configurações
+  let config = {
+    apiKey: null,
+    apiUrl: 'https://veyra-ten.vercel.app/api',  // URL fixa do servidor VEYRA
+    checkInterval: 10000, // 10 segundos (mais rápido)
+    debug: false
+  };
+
+  // Estado interno
+  let isInitialized = false;
+  let checkTimer = null;
+  let originalContent = null;
+  let isProtectionActive = false;
+
+  // Aplicar proteção instantânea via CSS (evita flash do conteúdo original)
+  function applyInstantProtection() {
+    // Criar CSS para ocultar conteúdo original imediatamente
+    const style = document.createElement('style');
+    style.id = 'veyra-instant-protection';
+    style.textContent = `
+      body:not(.veyra-ready) {
+        display: none !important;
+      }
+      body.veyra-ready {
+        display: block !important;
+      }
+    `;
+    document.head.appendChild(style);
+    log('Proteção instantânea aplicada via CSS para ocultar conteúdo');
+  }
+
+  // Remover proteção instantânea
+  function removeInstantProtection() {
+    // Remover estilo de ocultação instantânea
+    const instantHide = document.getElementById('veyra-instant-hide');
+    if (instantHide) {
+      instantHide.remove();
+    }
+    
+    // Remover estilo de proteção
+    const style = document.getElementById('veyra-instant-protection');
+    if (style) {
+      style.remove();
+    }
+    
+    // Adicionar classe e tornar visível
+    document.documentElement.classList.add('veyra-protection-active');
+    document.body.classList.add('veyra-ready');
+    log('Proteção instantânea removida');
+  }
+
+  // Conteúdo alternativo (será carregado da API)
+  let alternativeContent = {
+    title: 'Soluções Empresariais - Sua Empresa',
+    css: `
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body {
+        font-family: 'Poppins', -apple-system, BlinkMacSystemFont, sans-serif;
+        background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 50%, #3b82f6 100%);
+        color: white;
+        min-height: 100vh;
+        line-height: 1.6;
+      }
+      .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+      .hero { text-align: center; padding: 4rem 0; }
+      .hero h1 { font-size: 3rem; margin-bottom: 1rem; }
+      .hero p { font-size: 1.2rem; opacity: 0.9; }
+      .services { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; margin: 4rem 0; }
+      .service-card { background: rgba(255,255,255,0.1); padding: 2rem; border-radius: 1rem; text-align: center; }
+      .contact { background: rgba(255,255,255,0.1); padding: 2rem; border-radius: 1rem; margin-top: 4rem; }
+    `,
+    html: `
+      <div class="container">
+        <div class="hero">
+          <h1>🏢 Soluções Profissionais</h1>
+          <p>Transformamos ideias em resultados excepcionais para o seu negócio</p>
+        </div>
+        <div class="services">
+          <div class="service-card">
+            <h3>💼 Consultoria</h3>
+            <p>Estratégias personalizadas para o crescimento da sua empresa</p>
+          </div>
+          <div class="service-card">
+            <h3>🚀 Desenvolvimento</h3>
+            <p>Soluções tecnológicas inovadoras e escaláveis</p>
+          </div>
+          <div class="service-card">
+            <h3>📊 Analytics</h3>
+            <p>Análise de dados para decisões inteligentes</p>
+          </div>
+        </div>
+        <div class="contact">
+          <h2>Entre em Contato</h2>
+          <p>Pronto para transformar seu negócio? Fale conosco!</p>
+          <p>📧 contato@suaempresa.com | 📱 (11) 99999-9999</p>
+        </div>
+      </div>
+    `
+  };
+
+  // Funções utilitárias
+  function log(message, type = 'info') {
+    if (config.debug) {
+      console.log(`[CLYM ${type.toUpperCase()}]`, message);
+    }
+  }
+
+  function error(message) {
+    console.error('[CLYM ERROR]', message);
+  }
+
+  // Função para fazer requisições à API
+  async function apiRequest(endpoint, options = {}) {
+    try {
+      const response = await fetch(`${config.apiUrl}${endpoint}`, {
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+          ...options.headers
+        },
+        ...options
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      return await response.json();
+    } catch (err) {
+      error(`API request failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  // Buscar conteúdo alternativo da API
+  async function loadAlternativeContent() {
+    try {
+      const result = await apiRequest('/dashboard/content');
+      if (result && result.success && result.data) {
+        alternativeContent = {
+          title: result.data.title || 'Site em Manutenção',
+          css: result.data.css || alternativeContent.css,
+          html: result.data.html || alternativeContent.html
+        };
+        log('Conteúdo alternativo carregado da API');
+      }
+    } catch (error) {
+      log('Usando conteúdo alternativo padrão', 'warn');
+    }
+  }
+
+  // Verificar status da proteção
+  async function checkProtectionStatus() {
+    log('Verificando status da proteção...');
+
+    const result = await apiRequest('/protection/status');
+
+    if (result && result.success) {
+      const newStatus = result.data.isActive;
+
+      if (newStatus !== isProtectionActive) {
+        log(`Status mudou: ${isProtectionActive} -> ${newStatus}`);
+        isProtectionActive = newStatus;
+
+        if (isProtectionActive) {
+          // Carregar conteúdo alternativo antes de mostrar
+          await loadAlternativeContent();
+          showAlternativeContent();
+        } else {
+          showOriginalContent();
+        }
+      } else {
+        log(`Status confirmado: ${isProtectionActive ? 'Ativa' : 'Inativa'}`);
+      }
+    } else {
+      log('Falha ao verificar status - desativando proteção', 'warn');
+      if (isProtectionActive) {
+        showOriginalContent();
+        isProtectionActive = false;
+      }
+    }
+  }
+
+  // Salvar conteúdo original
+  function saveOriginalContent() {
+    if (!originalContent) {
+      // Verificar se DOM está pronto
+      if (!document.head || !document.body) {
+        log('DOM não está pronto, aguardando...', 'warn');
+        return;
+      }
+
+      originalContent = {
+        title: document.title,
+        head: document.head.innerHTML,
+        body: document.body.innerHTML
+      };
+      log('Conteúdo original salvo');
+    }
+  }
+
+  // Mostrar conteúdo alternativo
+  function showAlternativeContent() {
+    log('Mostrando conteúdo alternativo');
+    log('Conteúdo a ser aplicado:', alternativeContent);
+
+    // Salvar original se ainda não foi salvo
+    saveOriginalContent();
+
+    // Aplicar conteúdo alternativo
+    document.title = alternativeContent.title;
+
+    // Limpar head e adicionar CSS
+    document.head.innerHTML = `
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>${alternativeContent.title}</title>
+      <style>${alternativeContent.css}</style>
+    `;
+
+    // Substituir body
+    document.body.innerHTML = alternativeContent.html;
+
+    // Remover proteção instantânea e mostrar conteúdo
+    removeInstantProtection();
+
+    // Adicionar script de monitoramento
+    const script = document.createElement('script');
+    script.textContent = `
+      
+      // Registrar acesso
+      if (window.Veyra && window.Veyra.registerAccess) {
+        window.Veyra.registerAccess('alternative');
+      }
+    `;
+    document.body.appendChild(script);
+
+    log('Conteúdo alternativo aplicado com sucesso');
+  }
+
+  // Mostrar conteúdo original
+  function showOriginalContent() {
+    if (originalContent) {
+      log('Restaurando conteúdo original');
+      
+      document.title = originalContent.title;
+      document.head.innerHTML = originalContent.head;
+      document.body.innerHTML = originalContent.body;
+      
+      // Remover proteção instantânea
+      removeInstantProtection();
+
+      // Re-executar scripts se necessário
+      const scripts = document.querySelectorAll('script');
+      scripts.forEach(script => {
+        if (script.src) {
+          const newScript = document.createElement('script');
+          newScript.src = script.src;
+          script.parentNode.replaceChild(newScript, script);
+        }
+      });
+    }
+  }
+
+  // Registrar acesso para analytics
+  function registerAccess(type) {
+    apiRequest('/analytics/access', {
+      method: 'POST',
+      body: JSON.stringify({
+        domain: window.location.hostname,
+        type: type,
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        referrer: document.referrer
+      })
+    });
+  }
+
+  // API pública do VEYRA
+  window.Veyra = {
+    // Inicializar o sistema
+    init: async function(apiKey, options = {}) {
+      if (isInitialized) {
+        log('VEYRA já foi inicializado', 'warn');
+        return;
+      }
+
+      if (!apiKey) {
+        error('API Key é obrigatória');
+        return;
+      }
+
+      // Configurar
+      config.apiKey = apiKey;
+      config.debug = options.debug || false;
+      config.checkInterval = options.checkInterval || 10000;
+
+      if (options.apiUrl) {
+        config.apiUrl = options.apiUrl;
+      }
+
+      log('Inicializando VEYRA...', 'info');
+      log(`API URL: ${config.apiUrl}`);
+      log(`Check Interval: ${config.checkInterval}ms`);
+
+      // Aguardar DOM estar pronto
+      if (document.readyState === 'loading') {
+        await new Promise(resolve => {
+          document.addEventListener('DOMContentLoaded', resolve);
+        });
+      }
+
+      // Aplicar proteção instantânea para evitar flash
+      applyInstantProtection();
+
+      // Salvar conteúdo original
+      saveOriginalContent();
+
+      // Verificar se conseguiu salvar o conteúdo
+      if (!originalContent) {
+        log('Não foi possível salvar conteúdo original, tentando novamente...', 'warn');
+        setTimeout(() => {
+          saveOriginalContent();
+        }, 100);
+      }
+
+      // Verificar status real da proteção
+      await checkProtectionStatus();
+
+      // Se proteção não estiver ativa, remover proteção instantânea
+      if (!isProtectionActive) {
+        removeInstantProtection();
+      }
+
+      // Configurar verificação periódica
+      checkTimer = setInterval(checkProtectionStatus, config.checkInterval);
+
+      // Registrar acesso inicial
+      registerAccess('initial');
+
+      isInitialized = true;
+      log('VEYRA inicializado com sucesso!', 'info');
+    },
+
+    // Ativar proteção manualmente
+    activate: async function() {
+      const result = await apiRequest('/protection/activate', { method: 'POST' });
+      if (result && result.success) {
+        log('Proteção ativada manualmente');
+        checkProtectionStatus();
+      }
+    },
+
+    // Desativar proteção manualmente
+    deactivate: async function() {
+      const result = await apiRequest('/protection/deactivate', { method: 'POST' });
+      if (result && result.success) {
+        log('Proteção desativada manualmente');
+        checkProtectionStatus();
+      }
+    },
+
+    // Verificar status atual
+    status: async function() {
+      const result = await apiRequest('/protection/status');
+      return result ? result.data : null;
+    },
+
+    // Registrar acesso (para analytics)
+    registerAccess: registerAccess,
+
+    // Destruir instância
+    destroy: function() {
+      if (checkTimer) {
+        clearInterval(checkTimer);
+        checkTimer = null;
+      }
+      
+      if (isProtectionActive && originalContent) {
+        showOriginalContent();
+      }
+
+      isInitialized = false;
+      log('VEYRA destruído');
+    },
+
+    // Configurações atuais
+    getConfig: function() {
+      return { ...config };
+    }
+  };
+
+  // Auto-inicialização se API key estiver em atributo data
+  document.addEventListener('DOMContentLoaded', function() {
+    const script = document.querySelector('script[data-veyra-key]');
+    if (script) {
+      const apiKey = script.getAttribute('data-veyra-key');
+      const debug = script.hasAttribute('data-veyra-debug');
+
+      window.Veyra.init(apiKey, { debug });
+    }
+  });
+
+  log('VEYRA script carregado');
+
+  // Verificar se Veyra foi definido corretamente
+
+})();
